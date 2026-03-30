@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-03-07
+
+LED config support (Pro versions only)
+
 ## [0.9.3] - 2026-03-07
 
 Add support for AKP 05 (non-E variant)

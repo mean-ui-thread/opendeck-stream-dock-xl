@@ -30,9 +30,9 @@ Requires OpenDeck 2.5.0 or newer
 
 ## Installation
 
-1. Download an archive from [releases](https://github.com/4ndv/opendeck-akp03/releases)
+1. Download an archive from [releases](https://github.com/ambiso/opendeck-akp05/releases)
 2. In OpenDeck: Plugins -> Install from file
-3. Download [udev rules](./40-opendeck-akp03.rules) and install them by copying into `/etc/udev/rules.d/` and running `sudo udevadm control --reload-rules`
+3. Download [udev rules](./40-opendeck-akp05.rules) and install them by copying into `/etc/udev/rules.d/` and running `sudo udevadm control --reload-rules`
 4. Unplug and plug again the device, restart OpenDeck
 
 ## Knob LED configuration
