@@ -30,7 +30,7 @@ async fn get_candidates() -> Result<Vec<CandidateDevice>, MirajazzError> {
 
     let mut candidates: Vec<CandidateDevice> = Vec::new();
 
-    for dev in list_devices(&QUERIES).await? {
+    for dev in list_devices(QUERIES).await? {
         if let Some(candidate) = device_info_to_candidate(dev.clone()) {
             candidates.push(candidate);
         } else {
@@ -63,7 +63,7 @@ pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError>
     }
 
     let mut watcher = DeviceWatcher::new();
-    let mut watcher_stream = watcher.watch(&QUERIES).await?;
+    let mut watcher_stream = watcher.watch(QUERIES).await?;
 
     log::info!("Watcher is ready");
 

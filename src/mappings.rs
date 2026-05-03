@@ -165,6 +165,7 @@ impl Kind {
 
     /// Returns protocol version for device
     pub fn protocol_version(&self) -> usize {
+        #[allow(clippy::match_single_binding)]
         match self {
             _ => 3,
         }
@@ -172,37 +173,37 @@ impl Kind {
 
     pub fn image_format(&self) -> ImageFormat {
         if self.protocol_version() == 3 {
-            return ImageFormat {
+            ImageFormat {
                 mode: ImageMode::JPEG,
                 size: (112, 112),
                 rotation: ImageRotation::Rot180,
                 mirror: ImageMirroring::None,
-            };
+            }
+        } else {
+            ImageFormat {
+                mode: ImageMode::JPEG,
+                size: (60, 60),
+                rotation: ImageRotation::Rot0,
+                mirror: ImageMirroring::None,
+            }
         }
-
-        return ImageFormat {
-            mode: ImageMode::JPEG,
-            size: (60, 60),
-            rotation: ImageRotation::Rot0,
-            mirror: ImageMirroring::None,
-        };
     }
     pub fn touch_image_format(&self) -> ImageFormat {
         if self.protocol_version() == 3 {
-            return ImageFormat {
+            ImageFormat {
                 mode: ImageMode::JPEG,
                 size: (176, 112), // from https://github.com/MiraboxSpace/StreamDock-Device-SDK/blob/31d887551de556bd0776bf4982233999d58e49d1/CPP-SDK/src/HotspotDevice/StreamDockN4/streamdockN4.cpp#L57
                 rotation: ImageRotation::Rot180,
                 mirror: ImageMirroring::None,
-            };
+            }
+        } else {
+            ImageFormat {
+                mode: ImageMode::JPEG,
+                size: (60, 60),
+                rotation: ImageRotation::Rot0,
+                mirror: ImageMirroring::None,
+            }
         }
-
-        return ImageFormat {
-            mode: ImageMode::JPEG,
-            size: (60, 60),
-            rotation: ImageRotation::Rot0,
-            mirror: ImageMirroring::None,
-        };
     }
 
     pub fn supports_both_encoder_states(&self) -> bool {
