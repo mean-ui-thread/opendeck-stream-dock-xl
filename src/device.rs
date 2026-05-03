@@ -8,8 +8,7 @@ use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DEVICES, TOKENS,
-    led_config,
+    DEVICES, TOKENS, led_config,
     mappings::{
         COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, Kind, ROW_COUNT,
     },
