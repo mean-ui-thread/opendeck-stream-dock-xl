@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1] - 2026-05-01
+
+Add support for AKP05CN Pro
+
 ## [0.10.0] - 2026-03-07
 
 LED config support (Pro versions only)
