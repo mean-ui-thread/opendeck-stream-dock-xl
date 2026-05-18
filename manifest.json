@@ -2,7 +2,7 @@
   "Name": "VSD Inside / MiraBox Stream Dock XL",
   "Description": "An unofficial plugin for VSD Inside / MiraBox Stream Dock XL-family devices",
   "Author": "Mean-UI-Thread",
-  "Version": "0.1.0",
+  "Version": "0.1.1",
   "PluginUUID": "com.github.mean-ui-thread.opendeck-stream-dock-xl",
   "CodePathLin": "opendeck-stream-dock-xl-linux",
   "CodePathMac": "opendeck-stream-dock-xl-mac",
