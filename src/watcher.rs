@@ -4,7 +4,7 @@ use mirajazz::{
     error::MirajazzError,
     types::{DeviceLifecycleEvent, HidDeviceInfo},
 };
-use openaction::OUTBOUND_EVENT_MANAGER;
+use openaction::device_plugin;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -18,7 +18,7 @@ fn serial_to_id(serial: &String) -> String {
 }
 
 fn device_info_to_candidate(dev: HidDeviceInfo) -> Option<CandidateDevice> {
-    let id = serial_to_id(&dev.serial_number.clone()?);
+        let id = serial_to_id(&dev.serial_number.clone()?);
     let kind = Kind::from_vid_pid(dev.vendor_id, dev.product_id)?;
 
     Some(CandidateDevice { id, dev, kind })
@@ -30,7 +30,7 @@ async fn get_candidates() -> Result<Vec<CandidateDevice>, MirajazzError> {
 
     let mut candidates: Vec<CandidateDevice> = Vec::new();
 
-    for dev in list_devices(QUERIES).await? {
+    for dev in list_devices(&QUERIES).await? {
         if let Some(candidate) = device_info_to_candidate(dev.clone()) {
             candidates.push(candidate);
         } else {
@@ -63,7 +63,7 @@ pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError>
     }
 
     let mut watcher = DeviceWatcher::new();
-    let mut watcher_stream = watcher.watch(QUERIES).await?;
+    let mut watcher_stream = watcher.watch(&QUERIES).await?;
 
     log::info!("Watcher is ready");
 
@@ -106,9 +106,7 @@ pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError>
 
                     DEVICES.write().await.remove(&id);
 
-                    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-                        outbound.deregister_device(id.clone()).await.ok();
-                    }
+                    device_plugin::unregister_device(id.clone()).await.ok();
 
                     log::info!("Disconnected device {}", id);
                 }

@@ -69,5 +69,5 @@ pub fn load() -> LedConfig {
 }
 
 fn dirs_config_path() -> Option<std::path::PathBuf> {
-    Some(dirs::config_dir()?.join("opendeck-akp05").join("leds.toml"))
+    Some(dirs::config_dir()?.join("opendeck-stream-dock-xl").join("leds.toml"))
 }

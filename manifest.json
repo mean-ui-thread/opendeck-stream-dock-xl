@@ -1,19 +1,19 @@
 {
-  "Name": "Ajazz AKP05 / Mirabox N4",
-  "Description": "Device support plugin for Ajazz AKP05 (+variants)",
-  "Author": "ambiso",
-  "Version": "0.10.2",
-  "PluginUUID": "com.github.ambiso.opendeck-akp05",
-  "CodePathLin": "opendeck-akp05-linux",
-  "CodePathMac": "opendeck-akp05-mac",
-  "CodePathWin": "opendeck-akp05-win.exe",
+  "Name": "Stream Dock XL",
+  "Description": "An unofficial plugin for VSD Inside / MiraBox Stream Dock XL-family devices",
+  "Author": "Mean-UI-Thread",
+  "Version": "0.0.1",
+  "PluginUUID": "com.github.mean-ui-thread.opendeck-stream-dock-xl",
+  "CodePathLin": "opendeck-stream-dock-xl-linux",
+  "CodePathMac": "opendeck-stream-dock-xl-mac",
+  "CodePathWin": "opendeck-stream-dock-xl-win.exe",
   "Icon": "assets/icon",
   "Category": "Hardware",
   "OS": [
-    { "Platform": "linux" },
+    { "Platform": "linux", "MinimumVersion": "6.0" },
     { "Platform": "mac", "MinimumVersion": "11.3" },
     { "Platform": "windows", "MinimumVersion": "10" }
   ],
   "Actions": [],
-  "DeviceNamespace": "n4"
+  "DeviceNamespace": "xl"
 }

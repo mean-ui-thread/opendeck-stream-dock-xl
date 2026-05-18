@@ -1,25 +1,30 @@
-use std::time::Duration;
-
 use data_url::DataUrl;
 use image::load_from_memory_with_format;
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
-use openaction::{OUTBOUND_EVENT_MANAGER, SetImageEvent};
-use tokio::time::interval;
+use openaction::{device_plugin, global_events::SetImageEvent};
+use std::{sync::Arc, time::Duration};
+use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     DEVICES, TOKENS, led_config,
+    inputs::button_key,
     mappings::{
-        COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, Kind, ROW_COUNT,
+        COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, ROW_COUNT,
+        image_format,
     },
 };
+
+pub const HEART_BEAT_TIME: u64 = 10; // device powers off every 35 seconds seconds without receiving any command, so send keep-alive every 10 seconds just to be safe
+const ENCODER_REPEAT_INITIAL_DELAY_SECS: u64 = 1;
+const ENCODER_REPEAT_INTERVAL_MILLIS: u64 = 50;
 
 /// Initializes a device and listens for events
 pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
     log::info!("Running device task for {:?}", candidate);
 
     // Wrap in a closure so we can use `?` operator
-    let device = async {
+    let device = async || -> Result<Device, MirajazzError> {
         let device = connect(&candidate).await?;
 
         device.set_brightness(50).await?;
@@ -34,7 +39,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         }
 
         Ok(device)
-    }
+    }()
     .await;
 
     let device: Device = match device {
@@ -51,34 +56,37 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         }
     };
 
+    let device = Arc::new(device);
+
     log::info!("Registering device {}", candidate.id);
-    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-        outbound
-            .register_device(
-                candidate.id.clone(),
-                candidate.kind.human_name(),
-                ROW_COUNT as u8,
-                COL_COUNT as u8,
-                ENCODER_COUNT as u8,
-                DEVICE_TYPE,
-            )
-            .await
-            .unwrap();
+
+    if let Err(err) = device_plugin::register_device(
+        candidate.id.clone(),
+        candidate.kind.human_name(),
+        ROW_COUNT as u8,
+        COL_COUNT as u8,
+        ENCODER_COUNT as u8,
+        DEVICE_TYPE,
+    )
+    .await
+    {
+        log::error!("Failed to register device {}: {}", candidate.id, err);
     }
 
-    DEVICES.write().await.insert(candidate.id.clone(), device);
+    DEVICES
+        .write()
+        .await
+        .insert(candidate.id.clone(), device.clone());
 
     tokio::select! {
-        _ = device_events_task(&candidate) => {},
-        _ = keepalive_task(&candidate) => {},
+        _ = device_events_task(&candidate, device.clone()) => {},
+        _ = keep_alive_task(&candidate, device.clone()) => {},
         _ = token.cancelled() => {}
     };
 
     log::info!("Shutting down device {:?}", candidate);
 
-    if let Some(device) = DEVICES.read().await.get(&candidate.id) {
-        device.shutdown().await.ok();
-    }
+    device.shutdown().await.ok();
 
     log::info!("Device task finished for {:?}", candidate);
 }
@@ -93,8 +101,8 @@ pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
     }
 
     log::info!("Deregistering device {}", id);
-    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-        outbound.deregister_device(id.clone()).await.unwrap();
+    if let Err(err) = device_plugin::unregister_device(id.clone()).await {
+        log::error!("Failed to deregister device {}: {}", id, err);
     }
 
     log::info!("Cancelling tasks for device {}", id);
@@ -133,8 +141,14 @@ pub async fn connect(candidate: &CandidateDevice) -> Result<Device, MirajazzErro
 }
 
 /// Handles events from device to OpenDeck
-async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzError> {
+async fn device_events_task(
+    candidate: &CandidateDevice,
+    _device: Arc<Device>,
+) -> Result<(), MirajazzError> {
     log::info!("Connecting to {} for incoming events", candidate.id);
+
+    let mut encoder_repeat_tokens: [Option<CancellationToken>; ENCODER_COUNT] =
+        std::array::from_fn(|_| None);
 
     let devices_lock = DEVICES.read().await;
     let reader = match devices_lock.get(&candidate.id) {
@@ -166,38 +180,131 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
 
             let id = candidate.id.clone();
 
-            if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-                match update {
-                    DeviceStateUpdate::ButtonDown(key) => outbound.key_down(id, key).await.unwrap(),
-                    DeviceStateUpdate::ButtonUp(key) => outbound.key_up(id, key).await.unwrap(),
-                    DeviceStateUpdate::EncoderDown(encoder) => {
-                        outbound.encoder_down(id, encoder).await.unwrap();
+            match update {
+                DeviceStateUpdate::ButtonDown(key) => {
+                    if let Err(err) = device_plugin::key_down(id, key).await {
+                        log::error!("Failed to send key_down: {}", err);
                     }
-                    DeviceStateUpdate::EncoderUp(encoder) => {
-                        outbound.encoder_up(id, encoder).await.unwrap();
+                }
+                DeviceStateUpdate::ButtonUp(key) => {
+                    if let Err(err) = device_plugin::key_up(id, key).await {
+                        log::error!("Failed to send key_up: {}", err);
                     }
-                    DeviceStateUpdate::EncoderTwist(encoder, val) => {
-                        outbound
-                            .encoder_change(id, encoder, val as i16)
-                            .await
-                            .unwrap();
+                }
+                DeviceStateUpdate::EncoderDown(encoder) => {
+                    if let Err(err) = device_plugin::encoder_down(id, encoder as u8).await {
+                        log::error!("Failed to send encoder_down: {}", err);
                     }
+                }
+                DeviceStateUpdate::EncoderUp(encoder) => {
+                    let encoder = encoder as usize;
+
+                    if let Some(token) = encoder_repeat_tokens[encoder].take() {
+                        token.cancel();
+                    }
+
+                    if let Err(err) = device_plugin::encoder_up(id, encoder as u8).await {
+                        log::error!("Failed to send encoder_up: {}", err);
+                    }
+                }
+                DeviceStateUpdate::EncoderTwist(encoder, val) => {
+                    let encoder = encoder as usize;
+
+                    if val == i8::MIN {
+                        if let Some(token) = encoder_repeat_tokens[encoder].take() {
+                            token.cancel();
+                        }
+
+                        continue;
+                    }
+
+                    if let Err(err) = device_plugin::encoder_change(id, encoder as u8, val as i16).await {
+                        log::error!("Failed to send encoder_change: {}", err);
+                    }
+
+                    // Because the Stream Dock XL has rocker-style encoders, we make it repeat if the rocker
+                    // is held for a bit. Works the same as holding a key on a regular keyboard. This way,
+                    // if the user want to map one of those side rockers to brightness, they don't have to
+                    // keep twisting the encoder to change brightness by a large amount: they can just hold it
+                    // and wait for the value to start changing rapidly.
+                    start_encoder_repeat(
+                        candidate.id.clone(),
+                        encoder,
+                        val as i16,
+                        &mut encoder_repeat_tokens[encoder],
+                    );
                 }
             }
         }
     }
 
+    for token in encoder_repeat_tokens.into_iter().flatten() {
+        token.cancel();
+    }
+
     Ok(())
 }
 
+fn start_encoder_repeat(
+    id: String,
+    encoder: usize,
+    value: i16,
+    token_slot: &mut Option<CancellationToken>,
+) {
+    if let Some(token) = token_slot.take() {
+        token.cancel();
+    }
+
+    let repeat_token = CancellationToken::new();
+    *token_slot = Some(repeat_token.clone());
+
+    tokio::spawn(encoder_repeat_task(
+        id,
+        encoder as u8,
+        value,
+        repeat_token,
+    ));
+}
+
+async fn encoder_repeat_task(
+    id: String,
+    encoder: u8,
+    value: i16,
+    token: CancellationToken,
+) {
+    let initial_delay = time::sleep(Duration::from_secs(ENCODER_REPEAT_INITIAL_DELAY_SECS));
+    tokio::pin!(initial_delay);
+
+    tokio::select! {
+        _ = token.cancelled() => return,
+        _ = &mut initial_delay => {}
+    }
+
+    let mut interval = time::interval(Duration::from_millis(ENCODER_REPEAT_INTERVAL_MILLIS));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => break,
+            _ = interval.tick() => {
+                if let Err(err) = device_plugin::encoder_change(id.clone(), encoder, value).await {
+                    log::error!("Failed to send repeated encoder_change: {}", err);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// Sends periodic keepalives to the device to maintain connection
-async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError> {
-    let mut interval = interval(Duration::from_secs(10));
+async fn keep_alive_task(candidate: &CandidateDevice, _device: Arc<Device>) -> Result<(), MirajazzError> {
+    log::info!("Starting keep_alive loop for {}", candidate.id);
+
+    let mut interval = time::interval(Duration::from_secs(HEART_BEAT_TIME));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
         interval.tick().await;
-
-        log::debug!("Sending keepalive to {}", candidate.id);
 
         let devices_lock = DEVICES.read().await;
         let device = match devices_lock.get(&candidate.id) {
@@ -205,9 +312,9 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
             None => return Ok(()),
         };
 
-        if let Err(e) = device.keep_alive().await {
+        if let Err(err) = device.keep_alive().await {
             drop(devices_lock);
-            if !handle_error(&candidate.id, e).await {
+            if !handle_error(&candidate.id, err).await {
                 break;
             }
         }
@@ -216,40 +323,11 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
     Ok(())
 }
 
-fn map_position(mut position: u8, is_encoder: bool) -> Result<u8, MirajazzError> {
-    if is_encoder {
-        position += 10;
-    }
-    let position = match position {
-        0 => 10,
-        1 => 11,
-        2 => 12,
-        3 => 13,
-        4 => 14,
-        5 => 5,
-        6 => 6,
-        7 => 7,
-        8 => 8,
-        9 => 9,
-        10 => 0,
-        11 => 1,
-        12 => 2,
-        13 => 3,
-        _ => {
-            log::error!("Invalid key position");
-            return Err(MirajazzError::BadData);
-        }
-    };
-    Ok(position)
-}
-
 /// Handles different combinations of "set image" event, including clearing the specific buttons and whole device
 pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(), MirajazzError> {
-    let is_encoder = evt.controller.as_deref() == Some("Encoder");
     match (evt.position, evt.image) {
         (Some(position), Some(image)) => {
             log::debug!("Setting image for button {}", position);
-            let position = map_position(position, is_encoder)?;
 
             // OpenDeck sends image as a data url, so parse it using a library
             let url = DataUrl::process(image.as_str()).unwrap(); // Isn't expected to fail, so unwrap it is
@@ -266,24 +344,17 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
 
             device
                 .set_button_image(
-                    position,
-                    if is_encoder {
-                        Kind::from_vid_pid(device.vid, device.pid)
-                            .unwrap()
-                            .touch_image_format()
-                    } else {
-                        Kind::from_vid_pid(device.vid, device.pid)
-                            .unwrap()
-                            .image_format()
-                    },
+                    button_key(position),
+                    image_format(),
                     image,
                 )
                 .await?;
             device.flush().await?;
         }
         (Some(position), None) => {
-            let position = map_position(position, is_encoder)?;
-            device.clear_button_image(position).await?;
+            device
+                .clear_button_image(button_key(position))
+                .await?;
             device.flush().await?;
         }
         (None, None) => {

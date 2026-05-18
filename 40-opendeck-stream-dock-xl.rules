@@ -1,0 +1,10 @@
+# Rules for Stream Dock XL device family from compatible vendors
+# Grants access to the vendor HID interface for display/control
+# Install: sudo cp 40-opendeck-stream-dock-xl.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# USB device match (grants base permissions)
+SUBSYSTEM=="usb", ATTR{idVendor}=="5548", ATTR{idProduct}=="1031", MODE="0660", TAG+="uaccess"
+
+# hidraw interface match (for display/vendor protocol)
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="5548", ATTRS{idProduct}=="1031", MODE="0660", TAG+="uaccess"
