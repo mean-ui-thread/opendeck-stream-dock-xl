@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-05-29
+
+### 🐛 Bug Fixes
+
+- Device works after computer wakes up from sleep
+
 ## [0.1.1] - 2026-05-18
 
 ### 🐛 Bug Fixes
