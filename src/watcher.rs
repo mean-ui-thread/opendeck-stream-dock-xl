@@ -5,6 +5,7 @@ use mirajazz::{
     types::{DeviceLifecycleEvent, HidDeviceInfo},
 };
 use openaction::device_plugin;
+use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -42,15 +43,18 @@ async fn get_candidates() -> Result<Vec<CandidateDevice>, MirajazzError> {
 }
 
 pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError> {
+    log::info!("Watcher task starting");
+
     let tracker = TRACKER.lock().await.clone();
 
     // Scans for connected devices that (possibly) we can use
+    log::info!("Looking for connected devices");
     let candidates = get_candidates().await?;
 
-    log::info!("Looking for connected devices");
+    log::debug!("Found {} candidate devices during initial scan", candidates.len());
 
     for candidate in candidates {
-        log::info!("New candidate {:#?}", candidate);
+        log::info!("Initial candidate found: {}", candidate.id);
 
         let token = CancellationToken::new();
 
@@ -64,12 +68,46 @@ pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError>
 
     let mut watcher = DeviceWatcher::new();
     let mut watcher_stream = watcher.watch(&QUERIES).await?;
+    let mut rescan_interval = time::interval(std::time::Duration::from_secs(5));
+    rescan_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     log::info!("Watcher is ready");
 
     loop {
         let ev = tokio::select! {
             v = watcher_stream.next() => v,
+            _ = rescan_interval.tick() => {
+                let candidates = match get_candidates().await {
+                    Ok(candidates) => candidates,
+                    Err(err) => {
+                        log::error!("Periodic candidate rescan failed: {}", err);
+                        continue;
+                    }
+                };
+
+                for candidate in candidates {
+                    if DEVICES.read().await.contains_key(&candidate.id) {
+                        continue;
+                    }
+
+                    if TOKENS.read().await.contains_key(&candidate.id) {
+                        continue;
+                    }
+
+                    log::info!("Rescan found missing tracked device {}; spawning task", candidate.id);
+
+                    let token = CancellationToken::new();
+
+                    TOKENS
+                        .write()
+                        .await
+                        .insert(candidate.id.clone(), token.clone());
+
+                    tracker.spawn(device_task(candidate, token));
+                }
+
+                continue;
+            },
             _ = token.cancelled() => None
         };
 
@@ -81,8 +119,11 @@ pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError>
                     if let Some(candidate) = device_info_to_candidate(info) {
                         // Don't add existing device again
                         if DEVICES.read().await.contains_key(&candidate.id) {
+                            log::info!("Ignoring duplicate connect event for already tracked device {}", candidate.id);
                             continue;
                         }
+
+                        log::info!("Device connected: {}", candidate.id);
 
                         let token = CancellationToken::new();
 
@@ -91,9 +132,9 @@ pub async fn watcher_task(token: CancellationToken) -> Result<(), MirajazzError>
                             .await
                             .insert(candidate.id.clone(), token.clone());
 
-                        log::debug!("Spawning task for new device: {:?}", candidate);
+                        log::info!("Spawning task for new device: {}", candidate.id);
                         tracker.spawn(device_task(candidate, token));
-                        log::debug!("Spawned");
+                        log::info!("Spawned device task for newly connected device");
                     }
                 }
                 DeviceLifecycleEvent::Disconnected(info) => {

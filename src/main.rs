@@ -23,6 +23,10 @@ pub static DEVICES: LazyLock<RwLock<HashMap<String, Arc<Device>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOKENS: LazyLock<RwLock<HashMap<String, CancellationToken>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+pub static IMAGE_CACHE: LazyLock<RwLock<HashMap<String, HashMap<u8, Option<String>>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+pub static BRIGHTNESS_CACHE: LazyLock<RwLock<HashMap<String, u8>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TRACKER: LazyLock<Mutex<TaskTracker>> = LazyLock::new(|| Mutex::new(TaskTracker::new()));
 
 struct GlobalEventHandler;
@@ -31,6 +35,8 @@ static GLOBAL_EVENT_HANDLER: GlobalEventHandler = GlobalEventHandler;
 #[async_trait]
 impl global_events::GlobalEventHandler for GlobalEventHandler {
     async fn plugin_ready(&self) -> OpenActionResult<()> {
+        log::info!("Plugin ready callback received; starting watcher task");
+
         let tracker = TRACKER.lock().await.clone();
 
         let token = CancellationToken::new();
@@ -58,6 +64,34 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
             return Ok(());
         }
 
+        // Cache image state so it can be replayed if the device reconnects.
+        {
+            let mut cache = IMAGE_CACHE.write().await;
+            let entry = cache.entry(event.device.clone()).or_default();
+
+            match (event.position, event.image.clone()) {
+                (Some(position), image) => {
+                    let has_image = image.is_some();
+                    let previous = entry.insert(position, image.clone());
+
+                    if previous != Some(image) {
+                        log::debug!(
+                            "Cached SetImage changed for {} pos {} (has_image: {}, total cached keys: {})",
+                            event.device,
+                            position,
+                            has_image,
+                            entry.len()
+                        );
+                    }
+                }
+                (None, None) => {
+                    entry.clear();
+                    log::debug!("Cleared cached SetImage state for {}", event.device);
+                }
+                _ => {}
+            }
+        }
+
         let id = event.device.clone();
 
         if let Some(device) = DEVICES.read().await.get(&event.device) {
@@ -77,6 +111,11 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
     ) -> OpenActionResult<()> {
         log::debug!("Asked to set brightness: {:?}", event);
 
+        BRIGHTNESS_CACHE
+            .write()
+            .await
+            .insert(event.device.clone(), event.brightness);
+
         let id = event.device.clone();
 
         if let Some(device) = DEVICES.read().await.get(&event.device) {
@@ -92,6 +131,8 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
 }
 
 async fn shutdown() {
+    log::info!("Plugin shutdown requested; cancelling tracked tasks");
+
     let tokens = TOKENS.write().await;
 
     for (_, token) in tokens.iter() {

@@ -1,13 +1,13 @@
 use data_url::DataUrl;
-use image::load_from_memory_with_format;
+use image::{imageops::FilterType, load_from_memory_with_format};
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
 use openaction::{device_plugin, global_events::SetImageEvent};
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::{Duration, SystemTime}};
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DEVICES, TOKENS, led_config,
+    BRIGHTNESS_CACHE, DEVICES, IMAGE_CACHE, TOKENS, led_config,
     inputs::button_key,
     mappings::{
         COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, ROW_COUNT,
@@ -19,17 +19,38 @@ pub const HEART_BEAT_TIME: u64 = 10; // device powers off every 35 seconds secon
 const ENCODER_REPEAT_INITIAL_DELAY_SECS: u64 = 1;
 const ENCODER_REPEAT_INTERVAL_MILLIS: u64 = 50;
 
+async fn cleanup_device_state(id: &str, cancel_token: bool) {
+    log::info!("Cleaning up device state for {}", id);
+
+    if cancel_token {
+        if let Some(token) = TOKENS.write().await.remove(id) {
+            token.cancel();
+        }
+    } else {
+        TOKENS.write().await.remove(id);
+    }
+
+    DEVICES.write().await.remove(id);
+
+    if let Err(err) = device_plugin::unregister_device(id.to_string()).await {
+        log::error!("Failed to deregister device {}: {}", id, err);
+    }
+}
+
 /// Initializes a device and listens for events
 pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
     log::info!("Running device task for {:?}", candidate);
+    log::info!("Starting device initialization for {}", candidate.id);
 
     // Wrap in a closure so we can use `?` operator
     let device = async || -> Result<Device, MirajazzError> {
+        log::info!("Connecting to raw HID device for {}", candidate.id);
         let device = connect(&candidate).await?;
 
+        // Do not clear key images during init. If OpenDeck does not resend SetImage events
+        // after reconnect, clearing here permanently loses the user's visible key state.
+        log::info!("Applying initial brightness for {}", candidate.id);
         device.set_brightness(50).await?;
-        device.clear_all_button_images().await?;
-        device.flush().await?;
 
         let led = led_config::load();
         log::info!("Applying LED config: {:?}", led);
@@ -78,6 +99,12 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         .await
         .insert(candidate.id.clone(), device.clone());
 
+    if let Err(err) = replay_cached_state(&candidate.id, device.as_ref()).await {
+        log::error!("Failed to replay cached state for {}: {}", candidate.id, err);
+    }
+
+    log::info!("Device {} registered and stored; starting event and heartbeat tasks", candidate.id);
+
     tokio::select! {
         _ = device_events_task(&candidate, device.clone()) => {},
         _ = keep_alive_task(&candidate, device.clone()) => {},
@@ -87,8 +114,49 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
     log::info!("Shutting down device {:?}", candidate);
 
     device.shutdown().await.ok();
+    cleanup_device_state(&candidate.id, false).await;
 
     log::info!("Device task finished for {:?}", candidate);
+}
+
+async fn replay_cached_state(id: &str, device: &Device) -> Result<(), MirajazzError> {
+    let cached_brightness = BRIGHTNESS_CACHE.read().await.get(id).copied();
+
+    if let Some(brightness) = cached_brightness {
+        log::info!("Replaying cached brightness {} for {}", brightness, id);
+        device.set_brightness(brightness).await?;
+    }
+
+    let cached_images = IMAGE_CACHE.read().await.get(id).cloned();
+
+    if let Some(images) = cached_images {
+        if images.is_empty() {
+            log::info!("No cached button images to replay for {}", id);
+            return Ok(());
+        }
+
+        log::info!("Replaying {} cached button images for {}", images.len(), id);
+
+        let mut positions = images.keys().copied().collect::<Vec<u8>>();
+        positions.sort_unstable();
+
+        for position in positions {
+            let image = images.get(&position).cloned().unwrap_or(None);
+
+            let event = SetImageEvent {
+                device: id.to_string(),
+                controller: None,
+                position: Some(position),
+                image,
+            };
+
+            handle_set_image(device, event).await?;
+        }
+    } else {
+        log::info!("No cached state found for {}; waiting for OpenDeck image events", id);
+    }
+
+    Ok(())
 }
 
 /// Handles errors, returning true if should continue, returning false if an error is fatal
@@ -101,17 +169,7 @@ pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
     }
 
     log::info!("Deregistering device {}", id);
-    if let Err(err) = device_plugin::unregister_device(id.clone()).await {
-        log::error!("Failed to deregister device {}: {}", id, err);
-    }
-
-    log::info!("Cancelling tasks for device {}", id);
-    if let Some(token) = TOKENS.read().await.get(id) {
-        token.cancel();
-    }
-
-    log::info!("Removing device {} from the list", id);
-    DEVICES.write().await.remove(id);
+    cleanup_device_state(id, true).await;
 
     log::info!("Finished clean-up for {}", id);
 
@@ -162,7 +220,7 @@ async fn device_events_task(
     log::info!("Reader is ready for {}", candidate.id);
 
     loop {
-        log::debug!("Reading updates...");
+        log::debug!("{}: waiting for input updates", candidate.id);
 
         let updates = match reader.read(None).await {
             Ok(updates) => updates,
@@ -302,20 +360,61 @@ async fn keep_alive_task(candidate: &CandidateDevice, _device: Arc<Device>) -> R
 
     let mut interval = time::interval(Duration::from_secs(HEART_BEAT_TIME));
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut last_wall_clock = SystemTime::now();
+    let mut heartbeat_counter: u64 = 0;
 
     loop {
         interval.tick().await;
 
-        let devices_lock = DEVICES.read().await;
-        let device = match devices_lock.get(&candidate.id) {
-            Some(device) => device,
-            None => return Ok(()),
+        let now = SystemTime::now();
+        let gap = now
+            .duration_since(last_wall_clock)
+            .unwrap_or(Duration::from_secs(0));
+        last_wall_clock = now;
+        heartbeat_counter = heartbeat_counter.saturating_add(1);
+
+        log::debug!("Heartbeat tick for {}: sending keep_alive", candidate.id);
+
+        let device = {
+            let devices_lock = DEVICES.read().await;
+
+            match devices_lock.get(&candidate.id) {
+                Some(device) => device.clone(),
+                None => return Ok(()),
+            }
         };
 
         if let Err(err) = device.keep_alive().await {
-            drop(devices_lock);
             if !handle_error(&candidate.id, err).await {
                 break;
+            }
+        } else {
+            log::debug!("Heartbeat acknowledged by device {}", candidate.id);
+
+            // If wall-clock paused for a long time, we likely resumed from system sleep.
+            // Re-arm software mode and replay cached state even if no disconnect/connect event was emitted.
+            if gap > Duration::from_secs(HEART_BEAT_TIME * 2) {
+                log::debug!(
+                    "Detected long wall-clock gap ({:?}) for {}; forcing recycle to restore input path",
+                    gap,
+                    candidate.id
+                );
+
+                break;
+            }
+
+            // Safety net: periodically re-arm mode and repaint cached state to recover
+            // from silent panel resets and mode drift.
+            if heartbeat_counter % 6 == 0 {
+                log::info!(
+                    "Periodic mode/state refresh for {} on heartbeat #{}",
+                    candidate.id,
+                    heartbeat_counter
+                );
+
+                if let Err(err) = replay_cached_state(&candidate.id, device.as_ref()).await {
+                    log::error!("Failed periodic cached-state replay for {}: {}", candidate.id, err);
+                }
             }
         }
     }
@@ -340,12 +439,14 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
                 return Ok(()); // Not a fatal error, enough to just log it
             }
 
+            let format = image_format();
             let image = load_from_memory_with_format(body.as_slice(), image::ImageFormat::Jpeg)?;
+            let image = image.resize_to_fill(format.size.0 as u32, format.size.1 as u32, FilterType::Lanczos3);
 
             device
                 .set_button_image(
                     button_key(position),
-                    image_format(),
+                    format,
                     image,
                 )
                 .await?;
