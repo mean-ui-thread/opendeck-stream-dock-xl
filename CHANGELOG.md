@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-06-08
+
+### 🐛 Bug Fixes
+
+- Changed a few selected log:info into log:debug
+
 ## [0.1.2] - 2026-05-29
 
 ### 🐛 Bug Fixes
