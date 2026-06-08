@@ -123,7 +123,7 @@ async fn replay_cached_state(id: &str, device: &Device) -> Result<(), MirajazzEr
     let cached_brightness = BRIGHTNESS_CACHE.read().await.get(id).copied();
 
     if let Some(brightness) = cached_brightness {
-        log::info!("Replaying cached brightness {} for {}", brightness, id);
+        log::debug!("Replaying cached brightness {} for {}", brightness, id);
         device.set_brightness(brightness).await?;
     }
 
@@ -135,7 +135,7 @@ async fn replay_cached_state(id: &str, device: &Device) -> Result<(), MirajazzEr
             return Ok(());
         }
 
-        log::info!("Replaying {} cached button images for {}", images.len(), id);
+        log::debug!("Replaying {} cached button images for {}", images.len(), id);
 
         let mut positions = images.keys().copied().collect::<Vec<u8>>();
         positions.sort_unstable();
@@ -406,7 +406,7 @@ async fn keep_alive_task(candidate: &CandidateDevice, _device: Arc<Device>) -> R
             // Safety net: periodically re-arm mode and repaint cached state to recover
             // from silent panel resets and mode drift.
             if heartbeat_counter % 6 == 0 {
-                log::info!(
+                log::debug!(
                     "Periodic mode/state refresh for {} on heartbeat #{}",
                     candidate.id,
                     heartbeat_counter
