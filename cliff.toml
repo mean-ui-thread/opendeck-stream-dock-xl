@@ -57,6 +57,7 @@ commit_preprocessors = [
   # Check spelling of the commit with https://github.com/crate-ci/typos
   # If the spelling is incorrect, it will be automatically fixed.
   #{ pattern = '.*', replace_command = 'typos --write-changes -' },
+  { pattern = '(?mi)^(Signed-off-by|Co-authored-by|Reviewed-by):.*(?:\r?\n|$)', replace = "" },
 ]
 # regex for parsing and grouping commits
 commit_parsers = [

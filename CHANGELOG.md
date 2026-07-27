@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-07-27
+
+### 🐛 Bug Fixes
+
+- Fixed the build-mac: Removed uid:guid docker flags
+
+
+
+### 💼 Other
+
+- Renamed 'MiraBox' to 'mirabox' for consistency
+
+Other Mirabox hardware plugins in opendeck are all spelling it
+'Mirabox'.
+
+
+
 ## [0.1.3] - 2026-06-08
 
 ### 🐛 Bug Fixes
