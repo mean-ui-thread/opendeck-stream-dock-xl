@@ -2,7 +2,7 @@
 
 # OpenDeck Stream Dock XL Plugin
 
-An unofficial plugin for VSD Inside / MiraBox Stream Dock XL-family devices.
+An unofficial plugin for VSD Inside / Mirabox Stream Dock XL-family devices.
 
 This is a fork of [ambiso/opendeck-akp05](https://github.com/ambiso/opendeck-akp05) by [ambiso](https://github.com/ambiso) for their excellent encoder, led_config and heartbeat implementation that were easily adaptable and/or reusable as-is for the Stream Dock XL.
 
