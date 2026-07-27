@@ -50,7 +50,8 @@ build-linux: install-dev-deps
     cargo build --release --target x86_64-unknown-linux-gnu --target-dir target/plugin-linux
 
 build-mac: install-dev-deps
-    docker run --rm -v $(pwd):/io -w /io --user {{uid}}:{{gid}} -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache ghcr.io/rust-cross/cargo-zigbuild:0.22.3 cargo zigbuild --release --target universal2-apple-darwin --target-dir target/plugin-mac
+    #docker run --rm -v $(pwd):/io -w /io --user {{uid}}:{{gid}} -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache ghcr.io/rust-cross/cargo-zigbuild:0.22.3 cargo zigbuild --release --target universal2-apple-darwin --target-dir target/plugin-mac
+    docker run --rm -v $(pwd):/io -w /io -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache ghcr.io/rust-cross/cargo-zigbuild:0.22.3 cargo zigbuild --release --target universal2-apple-darwin --target-dir target/plugin-mac
 
 build-win: install-dev-deps
     cargo build --release --target x86_64-pc-windows-gnu --target-dir target/plugin-win
